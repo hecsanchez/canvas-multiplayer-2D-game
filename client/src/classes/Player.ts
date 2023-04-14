@@ -9,6 +9,7 @@ interface IPlayer {
     ctx: CanvasRenderingContext2D;
     position: Coordinates;
     velocity: Coordinates;
+    offset: Coordinates;
 }
 
 export class Player {
@@ -16,24 +17,48 @@ export class Player {
     ctx;
     velocity;
     height;
-    attack;
-    constructor({ctx, position, velocity}: IPlayer) {
+    attackArea;
+    width;
+    attacking;
+    constructor({ctx, position, velocity, offset}: IPlayer) {
         this.position = position;
         this.ctx = ctx;
         this.velocity = velocity
         this.height = 150;
-        this.attack = {
-
+        this.width = 50;
+        this.attackArea = {
+            position: {
+                x: this.position.x,
+                y: this.position.y
+            },
+            width: 100,
+            height: 50,
+            offset
         }
+        this.attacking = false;
     }
 
     init() {
         this.ctx.fillStyle = 'red';
-        this.ctx.fillRect(this.position.x, this.position.y, 50, this.height);
+        this.ctx.fillRect(this.position.x, this.position.y, this.width, this.height);
+
+        if (this.attacking) {
+            this.ctx.fillStyle = 'green';
+            this.ctx.fillRect(
+                this.attackArea.position.x,
+                this.attackArea.position.y,
+                this.attackArea.width,
+                this.attackArea.height
+            )
+        }
+
     }
 
     update() {
         this.init();
+        this.attackArea.position.x = this.position.x + this.attackArea.offset.x;
+        this.attackArea.position.y = this.position.y;
+
         this.position.y += this.velocity.y;
         this.position.x += this.velocity.x;
 
@@ -59,4 +84,12 @@ export class Player {
     jump() {
         this.velocity.y = -10;
     }
+
+    attack() {
+        this.attacking = true;
+        setTimeout(()=>{
+            this.attacking = false;
+        }, 100)
+    }
+
 }

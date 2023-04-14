@@ -19,8 +19,6 @@ function App() {
 
     const [connected, setConnected] = useState(false)
 
-    console.log('connected', connected)
-
     useEffect(() => {
         window.addEventListener('keydown', handleKeyDown);
         window.addEventListener('keyup', handleKeyUp);
@@ -32,14 +30,15 @@ function App() {
 
     const draw = (data) => {
         const oppositePlayer = initiator ? enemy.current : player.current;
-        const { position, velocity } = data;
+        const { position, velocity, attackArea } = data;
         oppositePlayer.position = position;
         oppositePlayer.velocity = velocity;
+        oppositePlayer.attackArea = attackArea;
     }
 
-    const broadcast = (data) => {
-        const broadcastData = data;
-        console.log('peerConnections', peerConnections)
+    const broadcast = (activePlayer) => {
+        const broadcastData = JSON.stringify(activePlayer)
+
         Object.values(peerConnections).forEach(peer => {
             peer.send(broadcastData);
         });
@@ -75,10 +74,8 @@ function App() {
         }
 
         const connect = () => {
-            console.log('peerConnections', peerConnections)
             if (peerConnections.length >= 2) return;
             Object.keys(peerConnections).forEach(id => {
-                console.log('peerIds', peerIds)
                 if (!peerIds.includes(id)) {
                     peerConnections[id].destroy();
                     delete peerConnections[id];
@@ -94,7 +91,6 @@ function App() {
                     return;
                 }
 
-                console.log('initiator', initiator)
                 peer = new window.SimplePeer({
                     initiator: initiator,
                     config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
@@ -110,7 +106,6 @@ function App() {
                     wsConnection.send(signalData);
                 });
                 peer.on('connect', () => {
-                    console.log('peer connected')
                     setConnected(true)
                     initGame();
                 })
@@ -151,14 +146,16 @@ function App() {
     pressedKeys.current = ({
         [Keys.RIGHT]: false,
         [Keys.LEFT]: false,
-        [Keys.UP]: false
+        [Keys.UP]: false,
     })
 
+    // TODO: set position for initiator to the left and opponent to the right
     const createPlayer = () => {
         player.current = new Player({
             ctx: ctx.current,
-            position: {x: 0, y:0},
+            position: {x: 50, y:0},
             velocity: {x: 0, y:0},
+            offset: {x: 0, y:0},
         });
     }
 
@@ -167,6 +164,7 @@ function App() {
             ctx: ctx.current,
             position: {x: 400, y:100},
             velocity: {x: 0, y:0},
+            offset: {x: -50, y:0},
         });
     }
 
@@ -175,42 +173,72 @@ function App() {
         ctx.current.fillRect(0, 0, width, height)
     }
 
-    const animate = () => {
+    const initMovementHandler = () => {
         const activePlayer = initiator ? player.current : enemy.current;
+        // Reset on keyUp
+        player.current.stopMoving();
+        enemy.current.stopMoving();
+
+        if (pressedKeys.current[Keys.RIGHT]) {
+            activePlayer.moveRight();
+            broadcast(activePlayer);
+        } else if (pressedKeys.current[Keys.LEFT]) {
+            activePlayer.moveLeft();
+            broadcast(activePlayer);
+        }
+    }
+
+    const initInitiatorAttackHandler = () => {
+        const activePlayer = player.current ;
+        const opponent = enemy.current;
+
+        const playerIsNearOpponent = activePlayer.attackArea.position.x + activePlayer.attackArea.width >= opponent.position.x
+        const isNotPastOpponent = activePlayer.attackArea.position.x <= opponent.position.x + opponent.width;
+        const playerIsNotJumping = (activePlayer.attackArea.position.y + activePlayer.height >= opponent.position.y) && (activePlayer.attackArea.position.y <= opponent.position.y + opponent.height);
+
+        if (playerIsNearOpponent && isNotPastOpponent && playerIsNotJumping && activePlayer.attacking) {
+            activePlayer.attacking = false;
+            console.log('go')
+        }
+    }
+
+    const initOpponentAttackHandler = () => {
+
+    }
+
+    const animate = () => {
         ctx.current.fillStyle = 'black'
         ctx.current.fillRect(0,0,width,height);
         player.current.update();
         enemy.current.update();
 
-        player.current.stopMoving();
-        enemy.current.stopMoving();
-        if (pressedKeys.current[Keys.RIGHT]) {
-            activePlayer.moveRight();
-            const playerData = JSON.stringify(activePlayer)
-            broadcast(playerData);
-        } else if (pressedKeys.current[Keys.LEFT]) {
-            activePlayer.moveLeft();
-            const playerData = JSON.stringify(activePlayer)
-            broadcast(playerData);
-        }
-        requestAnimationFrame(animate)
+        initMovementHandler();
+        initInitiatorAttackHandler();
+        requestAnimationFrame(animate);
     }
 
 
     const handleKeyDown = (e) => {
+        e.preventDefault();
         const activePlayer = initiator ? player.current : enemy.current;
         const key = e.key;
-        if (key === Keys.UP) {
-            activePlayer.jump();
-            return;
+        console.log('key', key)
+        switch(key) {
+            case Keys.UP:
+                activePlayer.jump();
+                broadcast(activePlayer);
+                break;
+            case Keys.ATTACK:
+                activePlayer.attack();
+                break;
+            default:
+                pressedKeys.current = {...pressedKeys.current, [key]: true}
         }
-        pressedKeys.current = {...pressedKeys.current, [key]: true}
     }
 
     const handleKeyUp = (e) => {
         const key = e.key;
         pressedKeys.current = {...pressedKeys.current, [key]: false}
-
     }
 
   return (
