@@ -31,7 +31,7 @@ export class Player {
                 x: this.position.x,
                 y: this.position.y
             },
-            width: 100,
+            width: 150,
             height: 50,
             offset
         }

@@ -1,23 +1,44 @@
-import { useRef, useEffect, useState } from 'react'
+import { useEffect, useState, type FC } from 'react'
 import './App.css'
-import {Player} from "./classes/Player";
 import {Keys} from "./types";
+import {initSocket, initiator, broadcast} from "./utils/connection";
+import {
+    createBackground,
+    createEnemy,
+    createPlayer,
+    initAttackHandler,
+    initMovementHandler
+} from "./utils/canvas";
+import {height, width} from "./utils/dimensions";
+import {useRefs} from "./utils/useRefs";
+import {HealthMeter} from "./components/HealthMeter/HealthMeter";
+import {Winner} from "./components/Winner/Winner";
+import {Loser} from "./components/Loser/Loser";
 
-let localId, peerIds;
-let peerConnections = {};
-let initiator = false;
-let peer;
-function App() {
-    const canvas = useRef();
-    const width = 1024;
-    const height = 576;
+const App: FC = () => {
+    const {canvas, player, enemy, ctx, pressedKeys} = useRefs();
 
-    const player = useRef();
-    const enemy = useRef();
-    const ctx = useRef();
-    const pressedKeys = useRef();
+    const [health, setHealth] = useState(100)
+    const [opponentHealth, setOpponentHealth] = useState(100)
 
     const [connected, setConnected] = useState(false)
+
+    const healthData = { health, opponentHealth }
+    console.log('initiator', initiator)
+    console.log('health', health)
+    console.log('opponentHealth', opponentHealth)
+
+    useEffect(()=>{
+        if (initiator) {
+            broadcast(player.current, healthData);
+        }
+    }, [opponentHealth])
+
+    useEffect(()=>{
+        if (!initiator) {
+            broadcast(enemy.current, healthData);
+        }
+    }, [health])
 
     useEffect(() => {
         window.addEventListener('keydown', handleKeyDown);
@@ -30,117 +51,54 @@ function App() {
 
     const draw = (data) => {
         const oppositePlayer = initiator ? enemy.current : player.current;
-        const { position, velocity, attackArea } = data;
+        const { activePlayer, healthData } = data;
+        const {health: currentPlayerHealthData, opponentHealth: opponentHealthData} = healthData;
+        const { position, velocity, attackArea } = activePlayer;
         oppositePlayer.position = position;
         oppositePlayer.velocity = velocity;
         oppositePlayer.attackArea = attackArea;
-    }
 
-    const broadcast = (activePlayer) => {
-        const broadcastData = JSON.stringify(activePlayer)
-
-        Object.values(peerConnections).forEach(peer => {
-            peer.send(broadcastData);
-        });
-    }
-
-    const initSocket = async () => {
-
-        const wsConnection = new WebSocket('ws:localhost:8081', 'json');
-        wsConnection.onopen = (e) => {
-            console.log(`wsConnection open to 127.0.0.1:8081`, e);
-        };
-        wsConnection.onerror = (e) => {
-            console.error(`wsConnection error `, e);
-        };
-        wsConnection.onmessage = (e) => {
-            let data = JSON.parse(e.data);
-            switch (data.type) {
-                case 'connection':
-                    localId = data.id;
-                    break;
-                case 'ids':
-                    peerIds = data.ids;
-                    connect();
-                    break;
-                case 'signal':
-                    signal(data.id, data.data);
-                    break;
-            }
-        };
-
-        const onPeerData = (id, data) => {
-            draw(JSON.parse(data));
-        }
-
-        const connect = () => {
-            if (peerConnections.length >= 2) return;
-            Object.keys(peerConnections).forEach(id => {
-                if (!peerIds.includes(id)) {
-                    peerConnections[id].destroy();
-                    delete peerConnections[id];
-                }
-            });
-
-            if (peerIds.length === 1) {
-                initiator = true;
-            }
-
-            peerIds.forEach(id => {
-                if (id === localId || peerConnections[id]) {
-                    return;
-                }
-
-                peer = new window.SimplePeer({
-                    initiator: initiator,
-                    config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
-                    channelName: 'test'
-                });
-                peer.on('error', console.error);
-                peer.on('signal', data => {
-                    const signalData = JSON.stringify({
-                        type: 'signal',
-                        id: localId,
-                        data
-                    })
-                    wsConnection.send(signalData);
-                });
-                peer.on('connect', () => {
-                    setConnected(true)
-                    initGame();
-                })
-                peer.on('data', (data) => onPeerData(id, data));
-                peer._debug = console.log
-
-                peer.on('signalingStateChange', (state) => {
-                    console.log(`WebRTC state changed for peer ${localId}`, state);
-                });
-
-                peerConnections[id] = peer;
-            });
-
-        }
-
-        const signal = (id, data) => {
-            if (peerConnections[id]) {
-                peerConnections[id].signal(data);
-            }
+        if (initiator) {
+            setHealth(currentPlayerHealthData);
+        } else {
+            setOpponentHealth(opponentHealthData);
         }
     }
 
     useEffect(() => {
-        initSocket()
+        const onConnect = () => {
+            setConnected(true)
+            initGame();
+        }
+
+        initSocket(onConnect, draw)
     }, [])
 
+    const animate = () => {
+        createBackground(ctx.current)
+        player.current.update();
+        enemy.current.update();
+
+        initMovementHandler(player.current, enemy.current, pressedKeys.current, {health, opponentHealth});
+
+        if (initiator) {
+            initAttackHandler(player.current, enemy.current, setOpponentHealth);
+        } else {
+            initAttackHandler(enemy.current, player.current, setHealth);
+        }
+
+        requestAnimationFrame(animate);
+    }
+
     const initGame = () => {
-        createPlayer();
-        createEnemy();
+        player.current = createPlayer(ctx.current);
+        enemy.current = createEnemy(ctx.current);
         requestAnimationFrame(animate)
     }
 
     useEffect(()=>{
         ctx.current = canvas.current.getContext('2d');
-        createBackground();
+        createBackground(ctx.current);
     }, [])
 
     pressedKeys.current = ({
@@ -149,84 +107,14 @@ function App() {
         [Keys.UP]: false,
     })
 
-    // TODO: set position for initiator to the left and opponent to the right
-    const createPlayer = () => {
-        player.current = new Player({
-            ctx: ctx.current,
-            position: {x: 50, y:0},
-            velocity: {x: 0, y:0},
-            offset: {x: 0, y:0},
-        });
-    }
-
-    const createEnemy = () => {
-        enemy.current = new Player({
-            ctx: ctx.current,
-            position: {x: 400, y:100},
-            velocity: {x: 0, y:0},
-            offset: {x: -50, y:0},
-        });
-    }
-
-    const createBackground = async () => {
-        ctx.current.fillStyle = 'white'
-        ctx.current.fillRect(0, 0, width, height)
-    }
-
-    const initMovementHandler = () => {
-        const activePlayer = initiator ? player.current : enemy.current;
-        // Reset on keyUp
-        player.current.stopMoving();
-        enemy.current.stopMoving();
-
-        if (pressedKeys.current[Keys.RIGHT]) {
-            activePlayer.moveRight();
-            broadcast(activePlayer);
-        } else if (pressedKeys.current[Keys.LEFT]) {
-            activePlayer.moveLeft();
-            broadcast(activePlayer);
-        }
-    }
-
-    const initInitiatorAttackHandler = () => {
-        const activePlayer = player.current ;
-        const opponent = enemy.current;
-
-        const playerIsNearOpponent = activePlayer.attackArea.position.x + activePlayer.attackArea.width >= opponent.position.x
-        const isNotPastOpponent = activePlayer.attackArea.position.x <= opponent.position.x + opponent.width;
-        const playerIsNotJumping = (activePlayer.attackArea.position.y + activePlayer.height >= opponent.position.y) && (activePlayer.attackArea.position.y <= opponent.position.y + opponent.height);
-
-        if (playerIsNearOpponent && isNotPastOpponent && playerIsNotJumping && activePlayer.attacking) {
-            activePlayer.attacking = false;
-            console.log('go')
-        }
-    }
-
-    const initOpponentAttackHandler = () => {
-
-    }
-
-    const animate = () => {
-        ctx.current.fillStyle = 'black'
-        ctx.current.fillRect(0,0,width,height);
-        player.current.update();
-        enemy.current.update();
-
-        initMovementHandler();
-        initInitiatorAttackHandler();
-        requestAnimationFrame(animate);
-    }
-
-
     const handleKeyDown = (e) => {
-        e.preventDefault();
         const activePlayer = initiator ? player.current : enemy.current;
         const key = e.key;
-        console.log('key', key)
+
         switch(key) {
             case Keys.UP:
                 activePlayer.jump();
-                broadcast(activePlayer);
+                broadcast(activePlayer, healthData);
                 break;
             case Keys.ATTACK:
                 activePlayer.attack();
@@ -243,7 +131,14 @@ function App() {
 
   return (
     <div className="App">
-     <canvas ref={canvas} width={width} height={height}/>
+        {(initiator && opponentHealth === 0) || (!initiator && health === 0) ? (
+            <Winner />
+        ): null}
+        {(initiator && health === 0) || (!initiator && opponentHealth === 0) ? (
+            <Loser />
+        ): null}
+        <HealthMeter playerHealth={health} opponentHealth={opponentHealth}/>
+        <canvas ref={canvas} width={width} height={height}/>
     </div>
   )
 }
